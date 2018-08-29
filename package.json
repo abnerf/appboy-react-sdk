@@ -1,6 +1,6 @@
 {
   "name": "react-native-appboy-sdk",
-  "version": "1.11.1",
+  "version": "1.11.1-eq1",
   "description": "Braze SDK for React Native.",
   "main": "index.js",
   "types": "index.d.ts",
@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Appboy/appboy-react-sdk.git"
+    "url": "git+https://github.com/abnerf/appboy-react-sdk.git"
   },
   "keywords": [
     "appboy",
@@ -29,9 +29,9 @@
   "author": "Appboy",
   "license": "LICENSE.md",
   "bugs": {
-    "url": "https://github.com/Appboy/appboy-react-sdk/issues"
+    "url": "https://github.com/abnerf/appboy-react-sdk/issues"
   },
-  "homepage": "https://github.com/Appboy/appboy-react-sdk#readme",
+  "homepage": "https://github.com/abnerf/appboy-react-sdk#readme",
   "devDependencies": {
     "eslint": "^3.4.0",
     "eslint-config-standard": "^6.0.0",
