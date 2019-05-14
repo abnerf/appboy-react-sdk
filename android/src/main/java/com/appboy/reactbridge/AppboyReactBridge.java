@@ -4,18 +4,21 @@ import android.content.Intent;
 import android.util.Log;
 
 import com.appboy.Appboy;
-import com.appboy.services.AppboyLocationService;
 import com.appboy.enums.Gender;
 import com.appboy.enums.Month;
 import com.appboy.enums.NotificationSubscriptionType;
 import com.appboy.enums.CardCategory;
 import com.appboy.events.FeedUpdatedEvent;
 import com.appboy.events.IEventSubscriber;
+import com.appboy.models.cards.Card;
 import com.appboy.models.outgoing.AppboyProperties;
+import com.appboy.models.outgoing.AttributionData;
 import com.appboy.models.outgoing.FacebookUser;
 import com.appboy.models.outgoing.TwitterUser;
+import com.appboy.services.AppboyLocationService;
 import com.appboy.support.AppboyLogger;
 import com.appboy.ui.activities.AppboyFeedActivity;
+import com.appboy.ui.inappmessage.AppboyInAppMessageManager;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
@@ -24,12 +27,16 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.ReadableMapKeySetIterator;
 import com.facebook.react.bridge.ReadableType;
 import com.facebook.react.bridge.Callback;
+import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.bridge.WritableNativeArray;
 
 import org.json.JSONObject;
 
 import java.lang.Integer;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -86,6 +93,11 @@ public class AppboyReactBridge extends ReactContextBaseJavaModule {
   }
 
   @ReactMethod
+  public void addAlias(String aliasName, String aliasLabel) {
+    Appboy.getInstance(getReactApplicationContext()).getCurrentUser().addAlias(aliasName, aliasLabel);
+  }
+
+  @ReactMethod
   public void registerPushToken(String token) {
     Appboy.getInstance(getReactApplicationContext()).registerAppboyPushMessages(token);
   }
@@ -113,11 +125,22 @@ public class AppboyReactBridge extends ReactContextBaseJavaModule {
             try {
               properties.addProperty(key, eventProperties.getInt(key));
             } catch (Exception e2) {
-              AppboyLogger.e(TAG, "Could not parse ReadableType.Number from ReadableMap");
+              AppboyLogger.e(TAG, "Could not parse ReadableType.Number from ReadableMap for key: " + key);
             }
           }
+        } else if (readableType == ReadableType.Map) {
+          try {
+            if (eventProperties.getMap(key).getString("type").equals("UNIX_timestamp")) {
+              double unixTimestamp = eventProperties.getMap(key).getDouble("value");
+              properties.addProperty(key, new Date((long)unixTimestamp));
+            } else {
+              AppboyLogger.e(TAG, "Unsupported ReadableMap type received for key: " + key);
+            }
+          } catch (Exception e) {
+            AppboyLogger.e(TAG, "Could not determine type from ReadableMap for key: " + key);
+          }
         } else {
-          AppboyLogger.e(TAG, "Could not map ReadableType to an AppboyProperty value");
+          AppboyLogger.e(TAG, "Could not map ReadableType to an AppboyProperty value for key: " + key);
         }
       }
     }
@@ -263,6 +286,11 @@ public class AppboyReactBridge extends ReactContextBaseJavaModule {
   }
 
   @ReactMethod
+  public void setLanguage(String language) {
+    Appboy.getInstance(getReactApplicationContext()).getCurrentUser().setLanguage(language);
+  }
+
+  @ReactMethod
   public void setAvatarImageUrl(String avatarImageUrl) {
     Appboy.getInstance(getReactApplicationContext()).getCurrentUser().setAvatarImageUrl(avatarImageUrl);
   }
@@ -388,6 +416,59 @@ public class AppboyReactBridge extends ReactContextBaseJavaModule {
     return cardCategory;
   }
 
+  @ReactMethod
+  public void logFeedCardClick(String id) {
+    Appboy.getInstance(getReactApplicationContext()).logFeedCardClick(id);
+  }
+
+  @ReactMethod
+  public void logFeedCardImpression(String id) {
+    Appboy.getInstance(getReactApplicationContext()).logFeedCardImpression(id);
+  }
+  @ReactMethod
+  public void logFeedDisplayed() {
+    Appboy.getInstance(getReactApplicationContext()).logFeedDisplayed();
+  }
+
+  @ReactMethod
+  public void getFeedCards(final Callback callback) {
+    IEventSubscriber<FeedUpdatedEvent> feedUpdatedSubscriber = null;
+
+      feedUpdatedSubscriber = new IEventSubscriber<FeedUpdatedEvent>() {
+        @Override
+        public void trigger(FeedUpdatedEvent feedUpdatedEvent) {
+          synchronized (mCallbackWasCalledMapLock) {
+            if (mCallbackWasCalledMap.get(callback) == null || mCallbackWasCalledMap.get(callback) != null && !mCallbackWasCalledMap.get(callback).booleanValue()) {
+              mCallbackWasCalledMap.put(callback, new Boolean(true));
+
+              WritableArray array = new WritableNativeArray();
+              List<Card> cards = feedUpdatedEvent.getFeedCards();
+
+              for (Card card : cards) {
+                try {
+                  WritableMap cardMap = AppboyReactUtils.convertJsonToMap(card.forJsonPut());
+                  array.pushMap(cardMap);
+                } catch(Exception e) {
+                  AppboyLogger.w(TAG, "Warning: Could not parse Feed Card to writable map.");
+                }
+              }
+
+              reportResultWithCallback(callback, null, array);
+            }
+          }
+
+          // Remove this listener from the feed subscriber map and from Appboy
+          Appboy.getInstance(getReactApplicationContext()).removeSingleSubscription(mFeedSubscriberMap.get(callback), FeedUpdatedEvent.class);
+          mFeedSubscriberMap.remove(callback);
+        }
+      };
+
+      // Put the subscriber into a map so we can remove it later from future subscriptions
+      mFeedSubscriberMap.put(callback, feedUpdatedSubscriber);
+      Appboy.getInstance(getReactApplicationContext()).subscribeToFeedUpdates(feedUpdatedSubscriber);
+      Appboy.getInstance(getReactApplicationContext()).requestFeedRefresh();
+  }
+
   // Registers a short-lived FeedUpdatedEvent subscriber, requests a feed refresh from cache, and and returns the requested card count in the callback
   private void getCardCountForTag(final String category, final Callback callback, String cardCountTag) {
     final CardCategory cardCategory = getCardCategoryFromString(category);
@@ -495,6 +576,27 @@ public class AppboyReactBridge extends ReactContextBaseJavaModule {
     Appboy.getInstance(getReactApplicationContext()).getCurrentUser().setLocationCustomAttribute(key, latitude, longitude);
     // Always return true as Android doesn't support getting a result from setLocationCustomAttribute().
     reportResultWithCallback(callback, null, true);
+  }
+
+  @ReactMethod
+  public void requestContentCardsRefresh() {
+    Appboy.getInstance(getReactApplicationContext()).requestContentCardsRefresh(false);
+  }
+
+  @ReactMethod
+  public void hideCurrentInAppMessage() {
+    AppboyInAppMessageManager.getInstance().hideCurrentlyDisplayingInAppMessage(true);
+  }
+
+  @ReactMethod
+  public void setAttributionData(String network, String campaign, String adGroup, String creative) {
+    AttributionData attributionData = new AttributionData(network, campaign, adGroup, creative);
+    Appboy.getInstance(getReactApplicationContext()).getCurrentUser().setAttributionData(attributionData);
+  }
+
+  @ReactMethod
+  public void getInstallTrackingId(Callback callback) {
+    reportResultWithCallback(callback, null, Appboy.getInstance(getReactApplicationContext()).getInstallTrackingId());
   }
 
   private Month parseMonth(int monthInt) {

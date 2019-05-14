@@ -56,10 +56,20 @@ RCT_EXPORT_METHOD(getInitialUrl:(RCTResponseSenderBlock)callback) {
   }
 }
 
+RCT_EXPORT_METHOD(getInstallTrackingId:(RCTResponseSenderBlock)callback) {
+  [self reportResultWithCallback:callback andError:nil andResult:[[Appboy sharedInstance] getDeviceId]];
+}
+
 RCT_EXPORT_METHOD(changeUser:(NSString *)userId)
 {
   RCTLogInfo(@"[Appboy sharedInstance] changeUser with value %@", userId);
   [[Appboy sharedInstance] changeUser:userId];
+}
+
+RCT_EXPORT_METHOD(addAlias:(NSString *)aliasName withLabel:(NSString *)aliasLabel)
+{
+  RCTLogInfo(@"[Appboy sharedInstance].user addAlias with values %@ %@", aliasName, aliasLabel);
+  [[Appboy sharedInstance].user addAlias:aliasName withLabel:aliasLabel];
 }
 
 RCT_EXPORT_METHOD(registerPushToken:(NSString *)token)
@@ -76,7 +86,23 @@ RCT_EXPORT_METHOD(submitFeedback:(NSString *)replyToEmail message:(NSString *)me
 
 RCT_EXPORT_METHOD(logCustomEvent:(NSString *)eventName withProperties:(nullable NSDictionary *)properties) {
   RCTLogInfo(@"[Appboy sharedInstance] logCustomEvent with eventName %@", eventName);
-  [[Appboy sharedInstance] logCustomEvent:eventName withProperties:properties];
+  NSMutableDictionary *transformedProperties = [properties mutableCopy];
+  for (NSString* key in properties) {
+    if ([properties[key] isKindOfClass:[NSDictionary class]]) {
+      NSDictionary* value = properties[key];
+      NSString* type = value[@"type"];
+      if ([type isEqualToString:@"UNIX_timestamp"]) {
+        double timestamp = [value[@"value"] doubleValue];
+        NSDate* nativeDate = [NSDate dateWithTimeIntervalSince1970:(timestamp / 1000.0)];
+        [transformedProperties setObject:nativeDate forKey:key];
+      } else {
+        [transformedProperties removeObjectForKey:key];
+        RCTLogInfo(@"[Appboy sharedInstance] logCustomEvent property not supported %@", type);
+      }
+    }
+  }
+
+  [[Appboy sharedInstance] logCustomEvent:eventName withProperties:transformedProperties];
 }
 
 RCT_EXPORT_METHOD(logPurchase:(NSString *)productIdentifier atPrice:(NSString *)price inCurrency:(NSString *)currencyCode withQuantity:(NSUInteger)quantity andProperties:(nullable NSDictionary *)properties) {
@@ -138,6 +164,11 @@ RCT_EXPORT_METHOD(setGender:(NSString *)gender callback:(RCTResponseSenderBlock)
   } else {
     [self reportResultWithCallback:callback andError:[NSString stringWithFormat:@"Invalid input %@. Gender not set.", gender] andResult:nil];
   }
+}
+
+RCT_EXPORT_METHOD(setLanguage:(NSString *)language) {
+  RCTLogInfo(@"[Appboy sharedInstance].user.language =  %@", language);
+  [Appboy sharedInstance].user.language = language;
 }
 
 RCT_EXPORT_METHOD(setPhoneNumber:(NSString *)phone) {
@@ -233,6 +264,16 @@ RCT_EXPORT_METHOD(setFacebookData:(nullable NSDictionary *)facebookUserDictionar
     [Appboy sharedInstance].user.facebookUser = facebookUser;
 }
 
+RCT_EXPORT_METHOD(setAttributionData:(NSString *)network withCampaign:(NSString *)campaign withAdGroup:(NSString *)adGroup withCreative:(NSString *)creative) {
+    RCTLogInfo(@"[Appboy sharedInstance].user setAttributionData");
+    ABKAttributionData *attributionData = [[ABKAttributionData alloc]
+                                         initWithNetwork:network
+                                         campaign:campaign
+                                         adGroup:adGroup
+                                         creative:creative];
+    [[Appboy sharedInstance].user setAttributionData:attributionData];
+}
+
 RCT_EXPORT_METHOD(launchNewsFeed) {
   RCTLogInfo(@"launchNewsFeed called");
   ABKNewsFeedViewController *feedModal = [[ABKNewsFeedViewController alloc] init];
@@ -262,6 +303,56 @@ RCT_EXPORT_METHOD(launchNewsFeed) {
 
 RCT_EXPORT_METHOD(requestFeedRefresh) {
   [[Appboy sharedInstance] requestFeedRefresh];
+}
+
+RCT_EXPORT_METHOD(getFeedCards:(RCTResponseSenderBlock)callback) {
+  NSMutableArray *jsonCards = [NSMutableArray array];
+  NSArray *cards = [[Appboy sharedInstance].feedController getCardsInCategories:ABKCardCategoryAll];
+
+  if (cards.count == 0 && [Appboy sharedInstance].feedController.lastUpdate == nil) {
+    [self reportResultWithCallback:callback andError:@"No fetch completed" andResult:nil];
+    return;
+  }
+
+  for (ABKCard *card in cards) {
+    NSError *error = nil;
+    NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:[card serializeToData] options:0 error:&error];
+
+    if (dict != nil && error == nil) {
+      [jsonCards addObject:dict];
+    } else {
+      RCTLogInfo(@"Warning: Error serializing feed card to JSON.");
+      error = nil;
+    }
+  }
+
+  [self reportResultWithCallback:callback andError:nil andResult:jsonCards];
+}
+
+RCT_EXPORT_METHOD(logFeedCardClick: (NSString *)id) {
+  NSArray *cards = [[Appboy sharedInstance].feedController getCardsInCategories:ABKCardCategoryAll];
+
+  for (ABKCard *card in cards) {
+    if ([card.idString isEqualToString:id]) {
+      [card logCardClicked];
+      break;
+    }
+  }
+}
+
+RCT_EXPORT_METHOD(logFeedCardImpression: (NSString *)id) {
+  NSArray *cards = [[Appboy sharedInstance].feedController getCardsInCategories:ABKCardCategoryAll];
+
+  for (ABKCard *card in cards) {
+    if ([card.idString isEqualToString:id]) {
+      [card logCardImpression];
+      break;
+    }
+  }
+}
+
+RCT_EXPORT_METHOD(logFeedDisplayed) {
+  [[Appboy sharedInstance] logFeedDisplayed];
 }
 
 RCT_EXPORT_METHOD(wipeData) {
@@ -314,6 +405,16 @@ RCT_EXPORT_METHOD(requestImmediateDataFlush) {
 RCT_EXPORT_METHOD(setLocationCustomAttribute:(NSString *)key latitude:(double)latitude longitude:(double)longitude callback:(RCTResponseSenderBlock)callback) {
   RCTLogInfo(@"[Appboy sharedInstance].user setLocationCustomAttribute:latitude:longitude:: =  %@", key);
   [self reportResultWithCallback:callback andError:nil andResult:@([[Appboy sharedInstance].user addLocationCustomAttributeWithKey:key latitude:latitude longitude:longitude])];
+}
+
+RCT_EXPORT_METHOD(requestContentCardsRefresh) {
+  RCTLogInfo(@"requestContentCardsRefresh called");
+  [[Appboy sharedInstance] requestContentCardsRefresh];
+}
+
+RCT_EXPORT_METHOD(hideCurrentInAppMessage) {
+  RCTLogInfo(@"hideCurrentInAppMessage called");
+  [[Appboy sharedInstance].inAppMessageController.inAppMessageUIController hideCurrentInAppMessage:YES];
 }
 
 RCT_EXPORT_MODULE();
